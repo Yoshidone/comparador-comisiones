@@ -3,6 +3,8 @@ import pandas as pd
 import pdfplumber
 import zipfile
 import re
+import pytesseract
+from pdf2image import convert_from_bytes
 
 st.title("Comparador de Comisiones por Contrato")
 
@@ -30,11 +32,23 @@ def extraer_tarifa(pdf_file):
 
     texto = ""
 
-    with pdfplumber.open(pdf_file) as pdf:
-        for pagina in pdf.pages:
-            contenido = pagina.extract_text()
-            if contenido:
-                texto += contenido
+    # intentar leer texto normal
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            for pagina in pdf.pages:
+                contenido = pagina.extract_text()
+                if contenido:
+                    texto += contenido
+    except:
+        pass
+
+    # si no encontró texto usar OCR
+    if texto.strip() == "":
+
+        images = convert_from_bytes(pdf_file.read())
+
+        for img in images:
+            texto += pytesseract.image_to_string(img)
 
     patron = r'(\d+(\.\d+)?%)'
     resultado = re.search(patron, texto)
@@ -47,7 +61,7 @@ def extraer_tarifa(pdf_file):
 
 
 # -----------------------------
-# Cargar archivo dinámicamente
+# Cargar archivo transacciones
 # -----------------------------
 
 def cargar_archivo(archivo):
@@ -57,6 +71,7 @@ def cargar_archivo(archivo):
     if nombre.endswith(".zip"):
 
         with zipfile.ZipFile(archivo) as z:
+
             nombre_csv = z.namelist()[0]
 
             with z.open(nombre_csv) as f:
@@ -71,6 +86,7 @@ def cargar_archivo(archivo):
         df = pd.read_excel(archivo)
 
     else:
+
         st.error("Formato no soportado")
         return None
 
@@ -78,7 +94,7 @@ def cargar_archivo(archivo):
 
 
 # -----------------------------
-# SUBIR CONTRATO
+# Subir contrato
 # -----------------------------
 
 pdf_file = st.file_uploader("Subir contrato PDF", type=["pdf"])
@@ -89,18 +105,22 @@ comercio = None
 if pdf_file:
 
     comercio = detectar_comercio(pdf_file)
-    tarifa_contrato = extraer_tarifa(pdf_file)
 
     st.success(f"Comercio detectado: {comercio}")
 
+    tarifa_contrato = extraer_tarifa(pdf_file)
+
     if tarifa_contrato:
-        st.success(f"Tarifa contrato: {tarifa_contrato}%")
+
+        st.success(f"Tarifa detectada en contrato: {tarifa_contrato}%")
+
     else:
+
         st.warning("No se detectó tarifa en el contrato")
 
 
 # -----------------------------
-# SUBIR ARCHIVO DE TRANSACCIONES
+# Subir archivo de transacciones
 # -----------------------------
 
 archivo = st.file_uploader(
@@ -116,7 +136,7 @@ if archivo and comercio:
 
         st.write("Archivo cargado correctamente")
 
-        # normalizar nombres
+        # normalizar nombre comercio
         df["Com_Nom"] = df["Com_Nom"].astype(str).str.lower()
 
         # filtrar comercio
@@ -125,18 +145,19 @@ if archivo and comercio:
         st.write("Transacciones encontradas:", len(df))
 
         if len(df) == 0:
-            st.warning("No se encontraron transacciones para ese comercio")
+
+            st.warning("No se encontraron transacciones para este comercio")
 
         else:
 
-            # separar pagos y fees
+            # separar pagos y comisiones
             df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY", na=False)]
             df_fees = df[df["TX_reference"].astype(str).str.startswith("SF", na=False)]
 
-            # agrupar pagos
+            # agrupar pagos por transacción
             pagos = df_pagos.groupby("TX_transaction_id")["TX_amount"].sum().reset_index()
 
-            # agrupar fees
+            # agrupar fees por transacción
             fees = df_fees.groupby("TX_transaction_id")["OP_amount"].sum().reset_index()
 
             # unir pagos con fees
@@ -152,15 +173,18 @@ if archivo and comercio:
 
             st.subheader("Resultado")
 
-            st.write(f"Comisión promedio cobrada: {round(comision_promedio,2)} %")
+            st.write("Comisión promedio cobrada:", round(comision_promedio,2), "%")
 
             if tarifa_contrato:
 
                 diferencia = abs(comision_promedio - tarifa_contrato)
 
                 if diferencia < 0.1:
+
                     st.success("La comisión coincide con el contrato")
+
                 else:
+
                     st.error("La comisión NO coincide con el contrato")
 
             st.dataframe(
