@@ -116,10 +116,11 @@ if archivo and comercio:
 
         st.write("Archivo cargado correctamente")
 
-        df["Com_Nombre"] = df["Com_Nombre"].astype(str).str.lower()
+        # normalizar nombres
+        df["Com_Nom"] = df["Com_Nom"].astype(str).str.lower()
 
-        # filtrar comercio del contrato
-        df = df[df["Com_Nombre"].str.contains(comercio)]
+        # filtrar comercio
+        df = df[df["Com_Nom"].str.contains(comercio)]
 
         st.write("Transacciones encontradas:", len(df))
 
@@ -128,18 +129,22 @@ if archivo and comercio:
 
         else:
 
+            # separar pagos y fees
             df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY", na=False)]
             df_fees = df[df["TX_reference"].astype(str).str.startswith("SF", na=False)]
 
-            df_merge = df_fees.merge(
-                df_pagos,
-                left_on="SF_transaction_related_id",
-                right_on="TX_transaction_id",
-                suffixes=("_fee","_pago")
-            )
+            # agrupar pagos
+            pagos = df_pagos.groupby("TX_transaction_id")["TX_amount"].sum().reset_index()
 
-            df_merge["fee"] = abs(df_merge["TX_amount_fee"])
-            df_merge["monto"] = df_merge["TX_amount_pago"]
+            # agrupar fees
+            fees = df_fees.groupby("TX_transaction_id")["OP_amount"].sum().reset_index()
+
+            # unir pagos con fees
+            df_merge = pagos.merge(fees, on="TX_transaction_id")
+
+            # calcular comisión
+            df_merge["fee"] = abs(df_merge["OP_amount"])
+            df_merge["monto"] = df_merge["TX_amount"]
 
             df_merge["porcentaje_fee"] = (df_merge["fee"] / df_merge["monto"]) * 100
 
@@ -159,5 +164,12 @@ if archivo and comercio:
                     st.error("La comisión NO coincide con el contrato")
 
             st.dataframe(
-                df_merge[["TX_reference_pago","monto","fee","porcentaje_fee"]]
+                df_merge[
+                    [
+                        "TX_transaction_id",
+                        "monto",
+                        "fee",
+                        "porcentaje_fee"
+                    ]
+                ]
             )
