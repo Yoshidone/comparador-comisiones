@@ -5,31 +5,58 @@ import zipfile
 st.title("Comparador de Comisiones por Contrato")
 
 # -----------------------------
-# Configuración manual contrato
+# Configuración contrato manual
 # -----------------------------
 
 st.subheader("Configuración del contrato")
 
-contrato = pd.DataFrame({
-    "Volumen_min": [0,500000,2000000,4000000],
-    "Volumen_max": [500000,2000000,4000000,999999999],
-    "Comision_%": [2.30,2.10,1.90,1.80],
-    "Comision_fija": [0.90,0.90,0.90,0.90]
-})
+texto_contrato = st.text_area(
+    "Escribe las tarifas del contrato en formato: volumen_min-volumen_max | porcentaje | fija",
+    """0-500000 | 2.30 | 0.90
+500000-2000000 | 2.10 | 0.90
+2000000-4000000 | 1.90 | 0.90
+4000000-999999999 | 1.80 | 0.90"""
+)
 
-contrato = st.data_editor(contrato)
+contrato = []
 
-st.write("Tabla del contrato configurada:")
+for linea in texto_contrato.split("\n"):
+
+    if linea.strip() == "":
+        continue
+
+    partes = linea.split("|")
+
+    volumen = partes[0].strip().split("-")
+
+    volumen_min = float(volumen[0])
+    volumen_max = float(volumen[1])
+
+    comision_porcentaje = float(partes[1].strip())
+    comision_fija = float(partes[2].strip())
+
+    contrato.append({
+        "Volumen_min": volumen_min,
+        "Volumen_max": volumen_max,
+        "Comision_%": comision_porcentaje,
+        "Comision_fija": comision_fija
+    })
+
+contrato = pd.DataFrame(contrato)
+
+st.write("Contrato interpretado:")
 st.dataframe(contrato)
 
 # -----------------------------
-# Seleccionar comercio
+# Ingresar comercio
 # -----------------------------
 
-comercio = st.text_input("Nombre del comercio (ej: pay retailers)").lower()
+comercio = st.text_input(
+    "Nombre del comercio (ej: pay retailers)"
+).lower()
 
 # -----------------------------
-# Cargar archivo
+# Función cargar archivo
 # -----------------------------
 
 def cargar_archivo(archivo):
@@ -60,6 +87,11 @@ def cargar_archivo(archivo):
 
     return df
 
+
+# -----------------------------
+# Subir archivo
+# -----------------------------
+
 archivo = st.file_uploader(
     "Subir archivo de transacciones",
     type=["zip","csv","xlsx"]
@@ -77,12 +109,11 @@ if archivo and comercio:
 
         st.success("Archivo cargado correctamente")
 
-        # normalizar comercio
         df["Com_Nom"] = df["Com_Nom"].astype(str).str.lower()
 
         df = df[df["Com_Nom"].str.contains(comercio)]
 
-        st.write("Filas del comercio:", len(df))
+        st.write("Filas encontradas:", len(df))
 
         if len(df) == 0:
 
@@ -90,17 +121,13 @@ if archivo and comercio:
 
         else:
 
-            # separar pagos y fees
             df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY")]
             df_fees = df[df["TX_reference"].astype(str).str.startswith("SF")]
 
-            # agrupar pagos
             pagos = df_pagos.groupby("TX_transaction_id")["TX_amount"].sum().reset_index()
 
-            # agrupar fees
             fees = df_fees.groupby("TX_transaction_id")["OP_amount"].sum().reset_index()
 
-            # unir
             df_merge = pagos.merge(fees,on="TX_transaction_id")
 
             df_merge["fee"] = abs(df_merge["OP_amount"])
@@ -109,15 +136,16 @@ if archivo and comercio:
             df_merge["porcentaje_fee"] = (df_merge["fee"] / df_merge["monto"]) * 100
 
             # -----------------------------
-            # calcular volumen total
+            # volumen total comercio
             # -----------------------------
 
             volumen_total = df_merge["monto"].sum()
 
-            st.write("Volumen total:", volumen_total)
+            st.subheader("Volumen total del comercio")
+            st.write(volumen_total)
 
             # -----------------------------
-            # detectar bracket contrato
+            # detectar bracket
             # -----------------------------
 
             fila = contrato[
@@ -136,10 +164,9 @@ if archivo and comercio:
 
             else:
 
-                st.error("No se encontró bracket para el volumen")
+                st.error("No se encontró bracket para ese volumen")
 
                 porcentaje_contrato = None
-                fija_contrato = None
 
             # -----------------------------
             # validar transacciones
