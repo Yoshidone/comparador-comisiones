@@ -3,7 +3,6 @@ import pandas as pd
 import pdfplumber
 import zipfile
 import re
-from io import BytesIO
 
 st.title("Comparador de Comisiones por Contrato")
 
@@ -48,6 +47,37 @@ def extraer_tarifa(pdf_file):
 
 
 # -----------------------------
+# Cargar archivo dinámicamente
+# -----------------------------
+
+def cargar_archivo(archivo):
+
+    nombre = archivo.name.lower()
+
+    if nombre.endswith(".zip"):
+
+        with zipfile.ZipFile(archivo) as z:
+            nombre_csv = z.namelist()[0]
+
+            with z.open(nombre_csv) as f:
+                df = pd.read_csv(f)
+
+    elif nombre.endswith(".csv"):
+
+        df = pd.read_csv(archivo)
+
+    elif nombre.endswith(".xlsx"):
+
+        df = pd.read_excel(archivo)
+
+    else:
+        st.error("Formato no soportado")
+        return None
+
+    return df
+
+
+# -----------------------------
 # SUBIR CONTRATO
 # -----------------------------
 
@@ -70,68 +100,64 @@ if pdf_file:
 
 
 # -----------------------------
-# SUBIR CSV COMPRIMIDO
+# SUBIR ARCHIVO DE TRANSACCIONES
 # -----------------------------
 
-archivo_zip = st.file_uploader("Subir CSV comprimido (.zip)", type=["zip"])
+archivo = st.file_uploader(
+    "Subir archivo de transacciones",
+    type=["zip","csv","xlsx"]
+)
 
-if archivo_zip and comercio:
+if archivo and comercio:
 
-    with zipfile.ZipFile(archivo_zip) as z:
+    df = cargar_archivo(archivo)
 
-        nombre_csv = z.namelist()[0]
+    if df is not None:
 
-        with z.open(nombre_csv) as f:
-            df = pd.read_csv(f)
+        st.write("Archivo cargado correctamente")
 
-    st.write("Archivo cargado correctamente")
+        df["Com_Nombre"] = df["Com_Nombre"].astype(str).str.lower()
 
-    # normalizar nombres
-    df["Com_Nombre"] = df["Com_Nombre"].astype(str).str.lower()
+        # filtrar comercio del contrato
+        df = df[df["Com_Nombre"].str.contains(comercio)]
 
-    # filtrar comercio del contrato
-    df = df[df["Com_Nombre"].str.contains(comercio)]
+        st.write("Transacciones encontradas:", len(df))
 
-    st.write("Transacciones encontradas:", len(df))
+        if len(df) == 0:
+            st.warning("No se encontraron transacciones para ese comercio")
 
-    if len(df) == 0:
-        st.warning("No se encontraron transacciones para ese comercio")
+        else:
 
-    else:
+            df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY", na=False)]
+            df_fees = df[df["TX_reference"].astype(str).str.startswith("SF", na=False)]
 
-        # separar pagos y fees
-        df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY", na=False)]
-        df_fees = df[df["TX_reference"].astype(str).str.startswith("SF", na=False)]
+            df_merge = df_fees.merge(
+                df_pagos,
+                left_on="SF_transaction_related_id",
+                right_on="TX_transaction_id",
+                suffixes=("_fee","_pago")
+            )
 
-        # cruzar pagos con fee
-        df_merge = df_fees.merge(
-            df_pagos,
-            left_on="SF_transaction_related_id",
-            right_on="TX_transaction_id",
-            suffixes=("_fee","_pago")
-        )
+            df_merge["fee"] = abs(df_merge["TX_amount_fee"])
+            df_merge["monto"] = df_merge["TX_amount_pago"]
 
-        # calcular comisión
-        df_merge["fee"] = abs(df_merge["TX_amount_fee"])
-        df_merge["monto"] = df_merge["TX_amount_pago"]
+            df_merge["porcentaje_fee"] = (df_merge["fee"] / df_merge["monto"]) * 100
 
-        df_merge["porcentaje_fee"] = (df_merge["fee"] / df_merge["monto"]) * 100
+            comision_promedio = df_merge["porcentaje_fee"].mean()
 
-        comision_promedio = df_merge["porcentaje_fee"].mean()
+            st.subheader("Resultado")
 
-        st.subheader("Resultado")
+            st.write(f"Comisión promedio cobrada: {round(comision_promedio,2)} %")
 
-        st.write(f"Comisión promedio cobrada: {round(comision_promedio,2)} %")
+            if tarifa_contrato:
 
-        if tarifa_contrato:
+                diferencia = abs(comision_promedio - tarifa_contrato)
 
-            diferencia = abs(comision_promedio - tarifa_contrato)
+                if diferencia < 0.1:
+                    st.success("La comisión coincide con el contrato")
+                else:
+                    st.error("La comisión NO coincide con el contrato")
 
-            if diferencia < 0.1:
-                st.success("La comisión coincide con el contrato")
-            else:
-                st.error("La comisión NO coincide con el contrato")
-
-        st.dataframe(
-            df_merge[["TX_reference_pago","monto","fee","porcentaje_fee"]]
-        )
+            st.dataframe(
+                df_merge[["TX_reference_pago","monto","fee","porcentaje_fee"]]
+            )
