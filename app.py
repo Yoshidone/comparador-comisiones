@@ -1,67 +1,35 @@
 import streamlit as st
 import pandas as pd
-import pdfplumber
 import zipfile
-import re
-import pytesseract
-from pdf2image import convert_from_bytes
 
 st.title("Comparador de Comisiones por Contrato")
 
 # -----------------------------
-# Detectar comercio desde PDF
+# Configuración manual contrato
 # -----------------------------
 
-def detectar_comercio(pdf_file):
+st.subheader("Configuración del contrato")
 
-    nombre_archivo = pdf_file.name.lower()
+contrato = pd.DataFrame({
+    "Volumen_min": [0,500000,2000000,4000000],
+    "Volumen_max": [500000,2000000,4000000,999999999],
+    "Comision_%": [2.30,2.10,1.90,1.80],
+    "Comision_fija": [0.90,0.90,0.90,0.90]
+})
 
-    nombre_archivo = nombre_archivo.replace(".pdf","")
-    nombre_archivo = nombre_archivo.replace("contrato","")
-    nombre_archivo = nombre_archivo.replace("_"," ")
-    nombre_archivo = nombre_archivo.replace("-"," ")
+contrato = st.data_editor(contrato)
 
-    return nombre_archivo.strip()
-
-
-# -----------------------------
-# Extraer tarifa desde PDF
-# -----------------------------
-
-def extraer_tarifa(pdf_file):
-
-    texto = ""
-
-    # intentar leer texto normal
-    try:
-        with pdfplumber.open(pdf_file) as pdf:
-            for pagina in pdf.pages:
-                contenido = pagina.extract_text()
-                if contenido:
-                    texto += contenido
-    except:
-        pass
-
-    # si no encontró texto usar OCR
-    if texto.strip() == "":
-
-        images = convert_from_bytes(pdf_file.read())
-
-        for img in images:
-            texto += pytesseract.image_to_string(img)
-
-    patron = r'(\d+(\.\d+)?%)'
-    resultado = re.search(patron, texto)
-
-    if resultado:
-        tarifa = resultado.group().replace("%","")
-        return float(tarifa)
-
-    return None
-
+st.write("Tabla del contrato configurada:")
+st.dataframe(contrato)
 
 # -----------------------------
-# Cargar archivo transacciones
+# Seleccionar comercio
+# -----------------------------
+
+comercio = st.text_input("Nombre del comercio (ej: pay retailers)").lower()
+
+# -----------------------------
+# Cargar archivo
 # -----------------------------
 
 def cargar_archivo(archivo):
@@ -92,41 +60,14 @@ def cargar_archivo(archivo):
 
     return df
 
-
-# -----------------------------
-# Subir contrato
-# -----------------------------
-
-pdf_file = st.file_uploader("Subir contrato PDF", type=["pdf"])
-
-tarifa_contrato = None
-comercio = None
-
-if pdf_file:
-
-    comercio = detectar_comercio(pdf_file)
-
-    st.success(f"Comercio detectado: {comercio}")
-
-    tarifa_contrato = extraer_tarifa(pdf_file)
-
-    if tarifa_contrato:
-
-        st.success(f"Tarifa detectada en contrato: {tarifa_contrato}%")
-
-    else:
-
-        st.warning("No se detectó tarifa en el contrato")
-
-
-# -----------------------------
-# Subir archivo de transacciones
-# -----------------------------
-
 archivo = st.file_uploader(
     "Subir archivo de transacciones",
     type=["zip","csv","xlsx"]
 )
+
+# -----------------------------
+# Procesar archivo
+# -----------------------------
 
 if archivo and comercio:
 
@@ -134,58 +75,86 @@ if archivo and comercio:
 
     if df is not None:
 
-        st.write("Archivo cargado correctamente")
+        st.success("Archivo cargado correctamente")
 
-        # normalizar nombre comercio
+        # normalizar comercio
         df["Com_Nom"] = df["Com_Nom"].astype(str).str.lower()
 
-        # filtrar comercio
         df = df[df["Com_Nom"].str.contains(comercio)]
 
-        st.write("Transacciones encontradas:", len(df))
+        st.write("Filas del comercio:", len(df))
 
         if len(df) == 0:
 
-            st.warning("No se encontraron transacciones para este comercio")
+            st.warning("No se encontraron transacciones")
 
         else:
 
-            # separar pagos y comisiones
-            df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY", na=False)]
-            df_fees = df[df["TX_reference"].astype(str).str.startswith("SF", na=False)]
+            # separar pagos y fees
+            df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY")]
+            df_fees = df[df["TX_reference"].astype(str).str.startswith("SF")]
 
-            # agrupar pagos por transacción
+            # agrupar pagos
             pagos = df_pagos.groupby("TX_transaction_id")["TX_amount"].sum().reset_index()
 
-            # agrupar fees por transacción
+            # agrupar fees
             fees = df_fees.groupby("TX_transaction_id")["OP_amount"].sum().reset_index()
 
-            # unir pagos con fees
-            df_merge = pagos.merge(fees, on="TX_transaction_id")
+            # unir
+            df_merge = pagos.merge(fees,on="TX_transaction_id")
 
-            # calcular comisión
             df_merge["fee"] = abs(df_merge["OP_amount"])
             df_merge["monto"] = df_merge["TX_amount"]
 
             df_merge["porcentaje_fee"] = (df_merge["fee"] / df_merge["monto"]) * 100
 
-            comision_promedio = df_merge["porcentaje_fee"].mean()
+            # -----------------------------
+            # calcular volumen total
+            # -----------------------------
 
-            st.subheader("Resultado")
+            volumen_total = df_merge["monto"].sum()
 
-            st.write("Comisión promedio cobrada:", round(comision_promedio,2), "%")
+            st.write("Volumen total:", volumen_total)
 
-            if tarifa_contrato:
+            # -----------------------------
+            # detectar bracket contrato
+            # -----------------------------
 
-                diferencia = abs(comision_promedio - tarifa_contrato)
+            fila = contrato[
+                (contrato["Volumen_min"] <= volumen_total) &
+                (contrato["Volumen_max"] > volumen_total)
+            ]
 
-                if diferencia < 0.1:
+            if not fila.empty:
 
-                    st.success("La comisión coincide con el contrato")
+                porcentaje_contrato = fila["Comision_%"].values[0]
+                fija_contrato = fila["Comision_fija"].values[0]
 
-                else:
+                st.success(
+                    f"Bracket aplicado: {porcentaje_contrato}% + {fija_contrato}"
+                )
 
-                    st.error("La comisión NO coincide con el contrato")
+            else:
+
+                st.error("No se encontró bracket para el volumen")
+
+                porcentaje_contrato = None
+                fija_contrato = None
+
+            # -----------------------------
+            # validar transacciones
+            # -----------------------------
+
+            if porcentaje_contrato is not None:
+
+                df_merge["validacion"] = df_merge.apply(
+                    lambda x: "OK"
+                    if abs(x["porcentaje_fee"] - porcentaje_contrato) < 0.2
+                    else "REVISAR",
+                    axis=1
+                )
+
+            st.subheader("Resultados")
 
             st.dataframe(
                 df_merge[
@@ -193,7 +162,8 @@ if archivo and comercio:
                         "TX_transaction_id",
                         "monto",
                         "fee",
-                        "porcentaje_fee"
+                        "porcentaje_fee",
+                        "validacion"
                     ]
                 ]
             )
