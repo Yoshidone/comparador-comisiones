@@ -5,7 +5,7 @@ import zipfile
 st.title("Comparador de Comisiones por Contrato")
 
 # -----------------------------
-# Configuración contrato manual
+# CONFIGURACIÓN DEL CONTRATO
 # -----------------------------
 
 st.subheader("Configuración del contrato")
@@ -48,7 +48,7 @@ st.write("Contrato interpretado:")
 st.dataframe(contrato)
 
 # -----------------------------
-# Ingresar comercio
+# COMERCIO
 # -----------------------------
 
 comercio = st.text_input(
@@ -56,7 +56,7 @@ comercio = st.text_input(
 ).lower()
 
 # -----------------------------
-# Función cargar archivo
+# FUNCIÓN CARGAR ARCHIVO
 # -----------------------------
 
 def cargar_archivo(archivo):
@@ -89,7 +89,7 @@ def cargar_archivo(archivo):
 
 
 # -----------------------------
-# Subir archivo
+# SUBIR ARCHIVO
 # -----------------------------
 
 archivo = st.file_uploader(
@@ -98,7 +98,7 @@ archivo = st.file_uploader(
 )
 
 # -----------------------------
-# Procesar archivo
+# PROCESAR ARCHIVO
 # -----------------------------
 
 if archivo and comercio:
@@ -109,26 +109,34 @@ if archivo and comercio:
 
         st.success("Archivo cargado correctamente")
 
-        df["Com_Nom"] = df["Com_Nom"].astype(str).str.lower()
+        # Mostrar columnas detectadas
+        st.write("Columnas detectadas:", df.columns)
 
-        df = df[df["Com_Nom"].str.contains(comercio)]
+        # normalizar comercio
+        df["Com_Nombre"] = df["Com_Nombre"].astype(str).str.lower()
 
-        st.write("Filas encontradas:", len(df))
+        df = df[df["Com_Nombre"].str.contains(comercio)]
+
+        st.write("Filas del comercio:", len(df))
 
         if len(df) == 0:
 
-            st.warning("No se encontraron transacciones")
+            st.warning("No se encontraron transacciones para ese comercio")
 
         else:
 
+            # separar pagos y fees
             df_pagos = df[df["TX_reference"].astype(str).str.startswith("PY")]
             df_fees = df[df["TX_reference"].astype(str).str.startswith("SF")]
 
+            # agrupar pagos
             pagos = df_pagos.groupby("TX_transaction_id")["TX_amount"].sum().reset_index()
 
+            # agrupar fees
             fees = df_fees.groupby("TX_transaction_id")["OP_amount"].sum().reset_index()
 
-            df_merge = pagos.merge(fees,on="TX_transaction_id")
+            # unir pagos con fees
+            df_merge = pagos.merge(fees, on="TX_transaction_id")
 
             df_merge["fee"] = abs(df_merge["OP_amount"])
             df_merge["monto"] = df_merge["TX_amount"]
@@ -136,7 +144,7 @@ if archivo and comercio:
             df_merge["porcentaje_fee"] = (df_merge["fee"] / df_merge["monto"]) * 100
 
             # -----------------------------
-            # volumen total comercio
+            # VOLUMEN TOTAL
             # -----------------------------
 
             volumen_total = df_merge["monto"].sum()
@@ -145,7 +153,7 @@ if archivo and comercio:
             st.write(volumen_total)
 
             # -----------------------------
-            # detectar bracket
+            # DETECTAR BRACKET
             # -----------------------------
 
             fila = contrato[
@@ -169,7 +177,7 @@ if archivo and comercio:
                 porcentaje_contrato = None
 
             # -----------------------------
-            # validar transacciones
+            # VALIDAR TRANSACCIONES
             # -----------------------------
 
             if porcentaje_contrato is not None:
